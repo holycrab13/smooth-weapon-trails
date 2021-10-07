@@ -48,9 +48,6 @@ public class SmoothWeaponTrail : MonoBehaviour
     [SerializeField]
     private int segments = 10;
 
-    /// <summary>
-    /// The number of vertical 
-    /// </summary>
     [SerializeField]
     private int subdivisions = 1;
 
