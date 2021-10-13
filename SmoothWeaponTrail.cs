@@ -48,6 +48,9 @@ public class SmoothWeaponTrail : MonoBehaviour
     [SerializeField]
     private int segments = 10;
 
+    /// <summary>
+    /// The number of vertical 
+    /// </summary>
     [SerializeField]
     private int subdivisions = 1;
 
@@ -61,13 +64,13 @@ public class SmoothWeaponTrail : MonoBehaviour
     private float updatesPerSecond = 60;
 
     [SerializeField]
-    private Transform[] nodes;
-
-    [SerializeField]
     private Material material;
 
     [SerializeField]
     private bool disabledByDefault = true;
+
+    [SerializeField]
+    private Transform[] nodes;
 
     private GameObject trailObject;
 
@@ -195,65 +198,60 @@ public class SmoothWeaponTrail : MonoBehaviour
             // Reset the timer
             updateTimer = 1.0f / updatesPerSecond;
 
-            // Update positions of all segment columns (leave out subdivisions)
-            for (int i = segments; i >= 1; i--)
+            // Update positions of all vertices - shift by one segment
+            for (int i = segments - 1; i >= 1; i--)
             {
-                for (int j = 0; j < nodes.Length; j++)
+                for (int j = 0; j < segmentVertexCount; j++)
                 {
-                    if (i < segments)
-                    {
-                        segmentLengths[i, j] = segmentLengths[i - 1, j];
-                    }
-
                     positions[i * segmentVertexCount + j] = positions[(i - 1) * segmentVertexCount + j];
                 }
             }
 
-            // Update the position of subdivision vertices
-            for (int i = segments - 1; i >= 0; i--)
+            // Update positions of all segment columns (leave out subdivisions)
+            for (int i = segments - 1; i >= 1; i--)
             {
-                // For each segment along each line, find 4 subsequent segment vertices along a line
-                // Perform hermite interpolation for all the interpolation vertices
                 for (int j = 0; j < nodes.Length; j++)
                 {
-                    // Start and endpoint for hermite interpolation
-                    Vector3 end = positions[(i + 1) * segmentVertexCount + j];
-                    Vector3 start = positions[i * segmentVertexCount + j];
+                    segmentLengths[i, j] = segmentLengths[i - 1, j];
+                }
+            }
+        }
 
-                    // Additional previous and next point for hermite interpolation
-                    Vector3 prev;
 
-                    if(i > 0)
-                    {
-                        prev = positions[(i - 1) * segmentVertexCount + j];
-                    }
-                    else
-                    {
-                        // Create an artificial point if we are at the end of the line
-                        prev = 2 * start - end;
-                    }
+        // Update the position of subdivision vertices in the two segments at the head 
+        // Later subdivision vertex positions can be inherited from the predecessor
+        for (int i = 1; i >= 0; i--)
+        {
+            // For each segment along each line, find 4 subsequent segment vertices along a line
+            // Perform hermite interpolation for all the interpolation vertices
+            for (int j = 0; j < nodes.Length; j++)
+            {
+                // Start and endpoint for hermite interpolation
+                Vector3 end = positions[(i + 1) * segmentVertexCount + j];
+                Vector3 start = positions[i * segmentVertexCount + j];
 
-                    Vector3 next;
+                // Additional previous and next point for hermite interpolation
+                Vector3 prev = i == 0 ? 2 * start - end : positions[(i - 1) * segmentVertexCount + j];
 
-                    if(i < segments - 1)
-                    {
-                        next = positions[(i + 2) * segmentVertexCount + j];
-                    }
-                    else
-                    {
-                        // Create an artificial point if we are at the end of the line
-                        next = 2 * end - start;
-                    }
+                Vector3 next;
+                if (i < segments - 1)
+                {
+                    next = positions[(i + 2) * segmentVertexCount + j];
+                }
+                else
+                {
+                    // Create an artificial point if we are at the end of the line
+                    next = 2 * end - start;
+                }
 
-                    // Perform interpolation for all subdivision vertices
-                    for (int s = 1; s <= subdivisions; s++)
-                    {
-                        float subdivisionLerp = (float)s / (subdivisions + 1);
-                        int subdivisionColumnIndex = i * segmentVertexCount + nodes.Length * s;
+                // Perform interpolation for all subdivision vertices
+                for (int s = 1; s <= subdivisions; s++)
+                {
+                    float subdivisionLerp = (float)s / (subdivisions + 1);
+                    int subdivisionColumnIndex = i * segmentVertexCount + nodes.Length * s;
 
-                        positions[subdivisionColumnIndex + j] = 
-                            HermiteInterpolate(prev, start, end, next, subdivisionLerp, subdivisionHermiteTension, subdivisionHermiteBias);
-                    }
+                    positions[subdivisionColumnIndex + j] =
+                        HermiteInterpolate(prev, start, end, next, subdivisionLerp, subdivisionHermiteTension, subdivisionHermiteBias);
                 }
             }
         }
@@ -274,9 +272,7 @@ public class SmoothWeaponTrail : MonoBehaviour
             // Set the uvs of the tail of the line
             uvs[segments * segmentVertexCount + j] = new Vector2(u, 0);
 
-            //// Set the uvs of the head of the line
-            //uvs[j] = new Vector2(u, 1);
-
+            // Division by lineLenght -> special handling of lineLength is zero
             if (lineLength == 0.0f)
             {
                 // If the entire line has length 0, distribute the v coordinate evenly
@@ -310,7 +306,7 @@ public class SmoothWeaponTrail : MonoBehaviour
             }
         }
 
-        // Update the head vertices
+        // Update the head vertex positions
         for (int j = 0; j < nodes.Length; j++)
         {
             positions[j] = nodes[j].position;
@@ -323,12 +319,13 @@ public class SmoothWeaponTrail : MonoBehaviour
                 float subdivisionLerp = (float)s / (subdivisions + 1);
                 int subdivisionColumnIndex = nodes.Length * s;
                 positions[subdivisionColumnIndex + j] = Vector3.Lerp(start, end, subdivisionLerp);
-
-
             }
         }
 
+        // Update timer for update per second
         updateTimer -= Time.deltaTime;
+        
+        // Update mesh
         mesh.vertices = positions;
         mesh.SetUVs(0, uvs);
         mesh.RecalculateBounds();
