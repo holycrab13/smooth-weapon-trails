@@ -198,7 +198,7 @@ public class SmoothWeaponTrail : MonoBehaviour
             // Reset the timer
             updateTimer = 1.0f / updatesPerSecond;
 
-            // Update positions of all vertices - shift by one segment
+            // Update positions of all vertices
             for (int i = segments - 1; i >= 1; i--)
             {
                 for (int j = 0; j < segmentVertexCount; j++)
@@ -207,7 +207,13 @@ public class SmoothWeaponTrail : MonoBehaviour
                 }
             }
 
-            // Update positions of all segment columns (leave out subdivisions)
+            // Update position of the last column
+            for(int i = 0; i < nodes.Length; i++)
+            {
+                positions[segments * segmentVertexCount + i] = positions[(segments - 1) * segmentVertexCount + i];
+            }
+
+            // Update segment lengths
             for (int i = segments - 1; i >= 1; i--)
             {
                 for (int j = 0; j < nodes.Length; j++)
@@ -218,8 +224,7 @@ public class SmoothWeaponTrail : MonoBehaviour
         }
 
 
-        // Update the position of subdivision vertices in the two segments at the head 
-        // Later subdivision vertex positions can be inherited from the predecessor
+        // Update the position of subdivision vertices
         for (int i = 1; i >= 0; i--)
         {
             // For each segment along each line, find 4 subsequent segment vertices along a line
@@ -272,7 +277,9 @@ public class SmoothWeaponTrail : MonoBehaviour
             // Set the uvs of the tail of the line
             uvs[segments * segmentVertexCount + j] = new Vector2(u, 0);
 
-            // Division by lineLenght -> special handling of lineLength is zero
+            //// Set the uvs of the head of the line
+            //uvs[j] = new Vector2(u, 1);
+
             if (lineLength == 0.0f)
             {
                 // If the entire line has length 0, distribute the v coordinate evenly
@@ -306,7 +313,7 @@ public class SmoothWeaponTrail : MonoBehaviour
             }
         }
 
-        // Update the head vertex positions
+        // Update the head vertices
         for (int j = 0; j < nodes.Length; j++)
         {
             positions[j] = nodes[j].position;
@@ -319,13 +326,12 @@ public class SmoothWeaponTrail : MonoBehaviour
                 float subdivisionLerp = (float)s / (subdivisions + 1);
                 int subdivisionColumnIndex = nodes.Length * s;
                 positions[subdivisionColumnIndex + j] = Vector3.Lerp(start, end, subdivisionLerp);
+
+
             }
         }
 
-        // Update timer for update per second
         updateTimer -= Time.deltaTime;
-        
-        // Update mesh
         mesh.vertices = positions;
         mesh.SetUVs(0, uvs);
         mesh.RecalculateBounds();
