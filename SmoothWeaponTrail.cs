@@ -55,13 +55,16 @@ public class SmoothWeaponTrail : MonoBehaviour
     private int subdivisions = 1;
 
     [SerializeField]
+    private bool useHermiteInterpolation = false;
+
+    [SerializeField]
     private float subdivisionHermiteTension = 0;
 
     [SerializeField]
     private float subdivisionHermiteBias = 0;
 
     [SerializeField]
-    private float updatesPerSecond = 60;
+    private float maxSegmentLength = 0.05f;
 
     [SerializeField]
     private Material material;
@@ -78,13 +81,13 @@ public class SmoothWeaponTrail : MonoBehaviour
 
     private Vector3[] positions;
 
+    private Color[] colors;
+
     private Vector3[] uvs;
 
     private float[,] segmentLengths;
 
     private Mesh mesh;
-
-    private float updateTimer;
 
     private int lineVertexCount;
 
@@ -92,10 +95,7 @@ public class SmoothWeaponTrail : MonoBehaviour
 
     private int vertexCount;
 
-    public void SetActive(bool value)
-    {
-        enabled = value;
-    }
+    private bool frozen;
 
     private void OnDestroy()
     {
@@ -104,6 +104,9 @@ public class SmoothWeaponTrail : MonoBehaviour
 
     private void OnEnable()
     {
+        CancelInvoke("Disable");
+        frozen = false;
+
         for (int i = lineVertexCount - 1; i >= 0; i--)
         {
             for (int j = 0; j < nodes.Length; j++)
@@ -123,6 +126,18 @@ public class SmoothWeaponTrail : MonoBehaviour
         trailObject.SetActive(false);
     }
 
+    //public void DisableDeferred(float delay)
+    //{
+    //    frozen = true;
+    //    Invoke("Disable", delay);
+    //}
+
+    private void Disable()
+    {
+        enabled = false;
+        frozen = false;
+    }
+
     /// <summary>
     /// Mesh creation
     /// </summary>
@@ -133,6 +148,7 @@ public class SmoothWeaponTrail : MonoBehaviour
         vertexCount = nodes.Length * lineVertexCount;
 
         positions = new Vector3[vertexCount];
+        colors = new Color[vertexCount];
         uvs = new Vector3[vertexCount];
         segmentLengths = new float[segments, nodes.Length];
         List<int> indices = new List<int>();
@@ -164,6 +180,7 @@ public class SmoothWeaponTrail : MonoBehaviour
         // Create trail mesh
         mesh = new Mesh();
         mesh.vertices = positions;
+        mesh.colors = colors;
         mesh.SetUVs(0, uvs);
         mesh.SetIndices(indices.ToArray(), MeshTopology.Triangles, 0);
         mesh.RecalculateBounds();
@@ -187,28 +204,34 @@ public class SmoothWeaponTrail : MonoBehaviour
     {
         // Update the length array at the first column.
         // Distances are the distance of the tracers to the vertices right behind the trail head
+
+        bool updateMesh = false;
+
         for (int j = 0; j < nodes.Length; j++)
         {
             segmentLengths[0, j] = Vector3.Distance(nodes[j].position, positions[(subdivisions + 1) * nodes.Length + j]);
+
+            if (segmentLengths[0, j] > maxSegmentLength)
+            {
+                updateMesh = true;
+            }
         }
 
-        // Only do this x times per second...
-        if (updateTimer < 0)
-        {
-            // Reset the timer
-            updateTimer = 1.0f / updatesPerSecond;
 
+        // Only do this x times per second...
+        if (updateMesh)
+        {
             // Update positions of all vertices
             for (int i = segments - 1; i >= 1; i--)
             {
                 for (int j = 0; j < segmentVertexCount; j++)
                 {
                     positions[i * segmentVertexCount + j] = positions[(i - 1) * segmentVertexCount + j];
+                    colors[i * segmentVertexCount + j] = colors[(i - 1) * segmentVertexCount + j];
                 }
             }
 
-            // Update position of the last column
-            for(int i = 0; i < nodes.Length; i++)
+            for (int i = 0; i < nodes.Length; i++)
             {
                 positions[segments * segmentVertexCount + i] = positions[(segments - 1) * segmentVertexCount + i];
             }
@@ -221,155 +244,190 @@ public class SmoothWeaponTrail : MonoBehaviour
                     segmentLengths[i, j] = segmentLengths[i - 1, j];
                 }
             }
-        }
 
-
-        // Update the position of subdivision vertices
-        for (int i = 1; i >= 0; i--)
-        {
-            // For each segment along each line, find 4 subsequent segment vertices along a line
-            // Perform hermite interpolation for all the interpolation vertices
+            // Update UVs for all vertices
             for (int j = 0; j < nodes.Length; j++)
             {
-                // Start and endpoint for hermite interpolation
-                Vector3 end = positions[(i + 1) * segmentVertexCount + j];
-                Vector3 start = positions[i * segmentVertexCount + j];
+                float lineLength = 0;
+                float u = j * (1.0f / (nodes.Length - 1));
 
-                // Additional previous and next point for hermite interpolation
-                Vector3 prev = i == 0 ? 2 * start - end : positions[(i - 1) * segmentVertexCount + j];
-
-                Vector3 next;
-                if (i < segments - 1)
+                for (int i = 0; i < segments; i++)
                 {
-                    next = positions[(i + 2) * segmentVertexCount + j];
+                    lineLength += segmentLengths[i, j];
+                }
+
+                float progressAlongLine = 0.0f;
+
+                // Set the uvs of the tail of the line
+                uvs[segments * segmentVertexCount + j] = new Vector2(u, 0);
+
+                //// Set the uvs of the head of the line
+                //uvs[j] = new Vector2(u, 1);
+
+                if (lineLength == 0.0f)
+                {
+                    // If the entire line has length 0, distribute the v coordinate evenly
+                    for (int i = lineVertexCount - 1; i >= 0; i--)
+                    {
+                        uvs[i * nodes.Length + j] = new Vector2(u, 1.0f / lineVertexCount);
+                    }
                 }
                 else
                 {
-                    // Create an artificial point if we are at the end of the line
-                    next = 2 * end - start;
-                }
+                    // Track the progress along each line
+                    float previousV = 0;
 
-                // Perform interpolation for all subdivision vertices
-                for (int s = 1; s <= subdivisions; s++)
-                {
-                    float subdivisionLerp = (float)s / (subdivisions + 1);
-                    int subdivisionColumnIndex = i * segmentVertexCount + nodes.Length * s;
+                    for (int i = segments - 1; i >= 0; i--)
+                    {
+                        // Update the progress along the line
+                        progressAlongLine += segmentLengths[i, j];
+                        float segmentV = progressAlongLine / lineLength;
 
-                    positions[subdivisionColumnIndex + j] =
-                        HermiteInterpolate(prev, start, end, next, subdivisionLerp, subdivisionHermiteTension, subdivisionHermiteBias);
+                        for (int s = 0; s <= subdivisions; s++)
+                        {
+                            float subdivisionLerp = (float)s / (subdivisions + 1);
+                            int subdivisionColumnIndex = i * segmentVertexCount + nodes.Length * s;
+
+                            float v = Mathf.Lerp(segmentV, previousV, subdivisionLerp);
+                            uvs[subdivisionColumnIndex + j] = new Vector2(u, v);
+                        }
+
+                        previousV = segmentV;
+                    }
                 }
             }
         }
 
-        // Update UVs for all vertices
-        for (int j = 0; j < nodes.Length; j++)
+        // Debug Draw
+        for (int i = 0; i < segments; i++)
         {
-            float lineLength = 0;
-            float u = j * (1.0f / (nodes.Length - 1));
-
-            for (int i = 0; i < segments; i++)
+            for (int j = 0; j < nodes.Length - 1; j++)
             {
-                lineLength += segmentLengths[i, j];
+                Debug.DrawLine(positions[i * segmentVertexCount + j], positions[i * segmentVertexCount + j + 1], Color.red);
             }
+        }
+    }
 
-            float progressAlongLine = 0.0f;
-
-            // Set the uvs of the tail of the line
-            uvs[segments * segmentVertexCount + j] = new Vector2(u, 0);
-
-            //// Set the uvs of the head of the line
-            //uvs[j] = new Vector2(u, 1);
-
-            if (lineLength == 0.0f)
+    private void LateUpdate()
+    {
+        if (!frozen)
+        {
+            // Update the head vertices
+            for (int j = 0; j < nodes.Length; j++)
             {
-                // If the entire line has length 0, distribute the v coordinate evenly
-                for (int i = lineVertexCount - 1; i >= 0; i--)
+                positions[j] = nodes[j].position;
+
+                Vector3 end = positions[segmentVertexCount + j];
+                Vector3 start = positions[j];
+
+                for (int s = 1; s <= subdivisions; s++)
                 {
-                    uvs[i * nodes.Length + j] = new Vector2(u, 1.0f / lineVertexCount);
+                    float subdivisionLerp = (float)s / (subdivisions + 1);
+                    int subdivisionColumnIndex = nodes.Length * s;
+                    positions[subdivisionColumnIndex + j] = Vector3.Lerp(start, end, subdivisionLerp);
                 }
             }
-            else
+
+            // Update the position of head subdivision vertices
+            for (int i = 1; i >= 0; i--)
             {
-                // Track the progress along each line
-                float previousV = 0;
-
-                for (int i = segments - 1; i >= 0; i--)
+                // For each segment along each line, find 4 subsequent segment vertices along a line
+                // Perform hermite interpolation for all the interpolation vertices
+                for (int j = 0; j < nodes.Length; j++)
                 {
-                    // Update the progress along the line
-                    progressAlongLine += segmentLengths[i, j];
-                    float segmentV = progressAlongLine / lineLength;
+                    // Start and endpoint for hermite interpolation
+                    Vector3 end = positions[(i + 1) * segmentVertexCount + j];
+                    Vector3 start = positions[i * segmentVertexCount + j];
 
-                    for (int s = 0; s <= subdivisions; s++)
+                    // Additional previous and next point for hermite interpolation
+                    Vector3 prev = i == 0 ? 2 * start - end : positions[(i - 1) * segmentVertexCount + j];
+
+                    Vector3 next;
+                    if (i < segments - 1)
+                    {
+                        next = positions[(i + 2) * segmentVertexCount + j];
+                    }
+                    else
+                    {
+                        // Create an artificial point if we are at the end of the line
+                        next = 2 * end - start;
+                    }
+
+                    // Perform interpolation for all subdivision vertices
+                    for (int s = 1; s <= subdivisions; s++)
                     {
                         float subdivisionLerp = (float)s / (subdivisions + 1);
                         int subdivisionColumnIndex = i * segmentVertexCount + nodes.Length * s;
 
-                        float v = Mathf.Lerp(segmentV, previousV, subdivisionLerp);
-                        uvs[subdivisionColumnIndex + j] = new Vector2(u, v);
+                        if(useHermiteInterpolation)
+                        {
+                            positions[subdivisionColumnIndex + j] = HermiteInterpolate(prev, start, end, next, subdivisionLerp);
+                        }
+                        else
+                        {
+                            positions[subdivisionColumnIndex + j] = CatmullRom(prev, start, end, next, subdivisionLerp);
+                        }
                     }
-
-                    previousV = segmentV;
                 }
             }
         }
 
-        // Update the head vertices
-        for (int j = 0; j < nodes.Length; j++)
-        {
-            positions[j] = nodes[j].position;
-
-            Vector3 end = positions[segmentVertexCount + j];
-            Vector3 start = positions[j];
-
-            for (int s = 1; s <= subdivisions; s++)
-            {
-                float subdivisionLerp = (float)s / (subdivisions + 1);
-                int subdivisionColumnIndex = nodes.Length * s;
-                positions[subdivisionColumnIndex + j] = Vector3.Lerp(start, end, subdivisionLerp);
-
-
-            }
-        }
-
-        updateTimer -= Time.deltaTime;
         mesh.vertices = positions;
+        mesh.colors = colors;
         mesh.SetUVs(0, uvs);
         mesh.RecalculateBounds();
     }
 
     /// <summary>
+    /// CatmullRom taken and adjusted from http://paulbourke.net/miscellaneous/interpolation/  
+    /// </summary>
+    /// <param name="previous"></param>
+    /// <param name="start"></param>
+    /// <param name="end"></param>
+    /// <param name="next"></param>
+    /// <param name="progress"></param>
+    /// <returns></returns>
+    private Vector3 CatmullRom(Vector3 previous, Vector3 start, Vector3 end, Vector3 next, float progress)
+    {
+        float progressSqr = progress * progress;
+        float progressCbe = progressSqr * progress;
+
+        return previous * (-0.5f * progressCbe + progressSqr - 0.5f * progress) +
+            start * (1.5f * progressCbe + -2.5f * progressSqr + 1.0f) +
+            end * (-1.5f * progressCbe + 2.0f * progressSqr + 0.5f * progress) +
+            next * (0.5f * progressCbe - 0.5f * progressSqr);
+    }
+
+
+    /// <summary>
     /// Hermite interpolation taken and adjusted from http://paulbourke.net/miscellaneous/interpolation/ 
     /// </summary>
-    /// <param name="p0"></param>
-    /// <param name="p1"></param>
-    /// <param name="p2"></param>
-    /// <param name="p3"></param>
-    /// <param name="mu"></param>
-    /// <param name="tension"></param>
-    /// <param name="bias"></param>
+    /// <param name="previous"></param>
+    /// <param name="start"></param>
+    /// <param name="end"></param>
+    /// <param name="next"></param>
+    /// <param name="progress"></param>
     /// <returns></returns>
     private Vector3 HermiteInterpolate(
-       Vector3 p0, Vector3 p1,
-       Vector3 p2, Vector3 p3,
-       float mu,
-       float tension,
-       float bias)
+       Vector3 previous, Vector3 start,
+       Vector3 end, Vector3 next,
+       float progress)
     {
         Vector3 m0, m1;
         float mu2, mu3;
         float a0, a1, a2, a3;
 
-        mu2 = mu * mu;
-        mu3 = mu2 * mu;
-        m0 = (p1 - p0) * (1 + bias) * (1 - tension) / 2;
-        m0 += (p2 - p1) * (1 - bias) * (1 - tension) / 2;
-        m1 = (p2 - p1) * (1 + bias) * (1 - tension) / 2;
-        m1 += (p3 - p2) * (1 - bias) * (1 - tension) / 2;
+        mu2 = progress * progress;
+        mu3 = mu2 * progress;
+        m0 = (start - previous) * (1 + subdivisionHermiteBias) * (1 - subdivisionHermiteTension) / 2;
+        m0 += (end - start) * (1 - subdivisionHermiteBias) * (1 - subdivisionHermiteTension) / 2;
+        m1 = (end - start) * (1 + subdivisionHermiteBias) * (1 - subdivisionHermiteTension) / 2;
+        m1 += (next - end) * (1 - subdivisionHermiteBias) * (1 - subdivisionHermiteTension) / 2;
         a0 = 2 * mu3 - 3 * mu2 + 1;
-        a1 = mu3 - 2 * mu2 + mu;
+        a1 = mu3 - 2 * mu2 + progress;
         a2 = mu3 - mu2;
         a3 = -2 * mu3 + 3 * mu2;
 
-        return a0 * p1 + a1 * m0 + a2 * m1 + a3 * p2;
+        return a0 * start + a1 * m0 + a2 * m1 + a3 * end;
     }
 }
